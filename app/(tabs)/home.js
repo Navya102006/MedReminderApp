@@ -1,498 +1,398 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Modal } from 'react-native';
+import {
+    View, Text, StyleSheet, ScrollView, TouchableOpacity,
+    Modal, ActivityIndicator, Platform
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { FontAwesome5, MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { Ionicons, FontAwesome5, MaterialIcons } from '@expo/vector-icons';
 import { useEffect, useState, useRef } from 'react';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 import { useMedicines } from '../../context/MedicineContext';
+import { useToast } from '../../context/ToastContext';
+import { BACKEND_URL } from '../../constants/api';
 import {
-    FREQUENCY_TIMES,
-    normalizeFrequency,
-    requestPermissions,
-    speakReminder,
-    scheduleMedicineReminders,
-    scheduleAdhocNotification
+    FREQUENCY_TIMES, normalizeFrequency, requestPermissions,
+    speakReminder, scheduleAdhocNotification
 } from '../../utils/ReminderEngine';
+import { colors, spacing, radius, shadow } from '../../constants/theme';
 
+// ─── helpers ─────────────────────────────────────────────────────────────────
+const getTimeCategory = (timeStr) => {
+    const hour = parseInt(timeStr?.split(':')[0] ?? '9');
+    if (hour >= 5 && hour < 12) return 'morning';
+    if (hour >= 12 && hour < 17) return 'afternoon';
+    return 'night';
+};
+
+const CATEGORIES = [
+    { key: 'morning', label: 'Morning', icon: 'sunny-outline', color: '#F59E0B', bg: '#FFFBEB', range: '5 AM – 12 PM' },
+    { key: 'afternoon', label: 'Afternoon', icon: 'partly-sunny-outline', color: '#2563EB', bg: '#EFF6FF', range: '12 PM – 5 PM' },
+    { key: 'night', label: 'Night', icon: 'moon-outline', color: '#7C3AED', bg: '#F5F3FF', range: '5 PM – 5 AM' },
+];
+
+// ─── DoseCard ─────────────────────────────────────────────────────────────────
+function DoseCard({ medicine, timeStr, onAction, actionLoading, takenToday }) {
+    const [expanded, setExpanded] = useState(false);
+
+    // If already taken, show green taken state — no action buttons
+    if (takenToday) {
+        return (
+            <View style={[dc.card, dc.cardTaken]}>
+                <View style={dc.cardTop}>
+                    <View style={dc.medInfo}>
+                        <View style={[dc.pillIcon, { backgroundColor: colors.successLight }]}>
+                            <MaterialIcons name="check-circle" size={18} color={colors.success} />
+                        </View>
+                        <View style={dc.text}>
+                            <Text style={[dc.name, { color: colors.textSecondary }]}>{medicine.name}</Text>
+                            <Text style={dc.sub}>{medicine.dosage || 'As directed'} · {timeStr}</Text>
+                        </View>
+                    </View>
+                    <View style={dc.takenBadge}>
+                        <MaterialIcons name="check" size={13} color={colors.success} />
+                        <Text style={dc.takenBadgeTxt}>Taken</Text>
+                    </View>
+                </View>
+            </View>
+        );
+    }
+
+    return (
+        <TouchableOpacity
+            style={dc.card}
+            onPress={() => setExpanded(e => !e)}
+            activeOpacity={0.85}
+        >
+            <View style={dc.cardTop}>
+                <View style={dc.medInfo}>
+                    <View style={dc.pillIcon}>
+                        <FontAwesome5 name="pills" size={16} color={colors.primary} />
+                    </View>
+                    <View style={dc.text}>
+                        <Text style={dc.name}>{medicine.name}</Text>
+                        <Text style={dc.sub}>{medicine.dosage || 'As directed'} · {timeStr}</Text>
+                    </View>
+                </View>
+                <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textMuted} />
+            </View>
+
+            {expanded && (
+                <View style={dc.actionsWrap}>
+                    <TouchableOpacity
+                        style={dc.takenBtn}
+                        onPress={() => onAction(medicine, 'taken')}
+                        disabled={actionLoading}
+                    >
+                        {actionLoading
+                            ? <ActivityIndicator color="#fff" size="small" />
+                            : <><MaterialIcons name="check-circle" size={16} color="#fff" /><Text style={dc.takenTxt}>Mark as Taken</Text></>
+                        }
+                    </TouchableOpacity>
+                    <View style={dc.minorRow}>
+                        <TouchableOpacity
+                            style={[dc.minorBtn, { borderColor: colors.primary }]}
+                            onPress={() => onAction(medicine, 'postpone')}
+                            disabled={actionLoading}
+                        >
+                            <Ionicons name="time-outline" size={14} color={colors.primary} />
+                            <Text style={[dc.minorTxt, { color: colors.primary }]}>In 10 mins</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[dc.minorBtn, { borderColor: colors.error }]}
+                            onPress={() => onAction(medicine, 'skip')}
+                            disabled={actionLoading}
+                        >
+                            <MaterialIcons name="block" size={14} color={colors.error} />
+                            <Text style={[dc.minorTxt, { color: colors.error }]}>Skip dose</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
+        </TouchableOpacity>
+    );
+}
+
+// ─── TimeGroup ────────────────────────────────────────────────────────────────
+function TimeGroup({ category, doses, onAction, actionLoading, takenSet }) {
+    if (doses.length === 0) return null;
+    return (
+        <View style={tg.group}>
+            <View style={tg.header}>
+                <View style={[tg.iconBox, { backgroundColor: category.bg }]}>
+                    <Ionicons name={category.icon} size={16} color={category.color} />
+                </View>
+                <View>
+                    <Text style={tg.label}>{category.label}</Text>
+                    <Text style={tg.range}>{category.range}</Text>
+                </View>
+                <View style={[tg.countBadge, { backgroundColor: category.bg }]}>
+                    <Text style={[tg.countTxt, { color: category.color }]}>{doses.length}</Text>
+                </View>
+            </View>
+            {doses.map((d, i) => (
+                <DoseCard
+                    key={`${d.id}-${i}`}
+                    medicine={d}
+                    timeStr={d._timeStr}
+                    onAction={onAction}
+                    actionLoading={actionLoading}
+                    takenToday={takenSet.has(d.id)}
+                />
+            ))}
+        </View>
+    );
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
 export default function HomeScreen() {
-    const { prescriptions, logAdherence, skipCounts, updateSkipCount } = useMedicines();
-    const [upcomingReminders, setUpcomingReminders] = useState([]);
-    const [userData, setUserData] = useState({ email: '', caretakerEmail: 'caretaker@example.com' });
+    const { prescriptions, adherenceLogs, logAdherence, skipCounts, updateSkipCount } = useMedicines();
+    const { showSuccess, showError, showInfo } = useToast();
+    const router = useRouter();
+
+    const [groupedDoses, setGroupedDoses] = useState({ morning: [], afternoon: [], night: [] });
+    const [totalToday, setTotalToday] = useState(0);
+    const [takenTodaySet, setTakenTodaySet] = useState(new Set());
+    const [userData, setUserData] = useState({});
+    const [actionLoading, setActionLoading] = useState(false);
+    const [greeting, setGreeting] = useState('Good morning');
     const notificationListener = useRef();
     const responseListener = useRef();
 
-    const [selectedMedForModal, setSelectedMedForModal] = useState(null);
-    const [isModalVisible, setIsModalVisible] = useState(false);
-
     useEffect(() => {
-        setupReminders();
+        const h = new Date().getHours();
+        setGreeting(h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening');
         loadUserInfo();
+        requestPermissions();
 
-        notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-            const { medicineName } = notification.request.content.data;
-            if (medicineName) speakReminder(medicineName);
-        });
+        if (Platform.OS !== 'web') {
+            notificationListener.current = Notifications.addNotificationReceivedListener(n => {
+                const name = n.request.content.data?.medicineName;
+                if (name) speakReminder(name);
+            });
+            return () => notificationListener.current?.remove();
+        }
+    }, []);
 
-        responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-            const { medicineId } = response.notification.request.content.data;
-            if (medicineId) {
-                // Find medicine to show in modal
-                const allMedicines = prescriptions.flatMap(p => p.medicines);
-                const med = allMedicines.find(m => m.id === medicineId);
-                if (med) {
-                    setSelectedMedForModal(med);
-                    setIsModalVisible(true);
-                }
-            }
-        });
+    useEffect(() => { buildDoseGroups(); }, [prescriptions]);
+    // Rebuild taken set whenever adherenceLogs change
+    useEffect(() => {
+        const today = new Date().toDateString();
+        const taken = new Set(
+            adherenceLogs
+                .filter(l => l.status === 'taken' && new Date(l.timestamp).toDateString() === today)
+                // Use slotKey for per-slot tracking; fallback to medicineId for old logs
+                .map(l => l.slotKey || l.medicineId)
+        );
 
-        return () => {
-            if (notificationListener.current) notificationListener.current.remove();
-            if (responseListener.current) responseListener.current.remove();
-        };
-    }, [prescriptions]);
+        setTakenTodaySet(taken);
+    }, [adherenceLogs]);
 
     const loadUserInfo = async () => {
         try {
-            const storedEmail = await AsyncStorage.getItem('userEmail');
-            const storedCaretaker = await AsyncStorage.getItem('caretakerEmail');
-            if (storedEmail) setUserData(prev => ({ ...prev, email: storedEmail }));
-            if (storedCaretaker) setUserData(prev => ({ ...prev, caretakerEmail: storedCaretaker }));
-        } catch (e) {
-            console.error(e);
-        }
+            const raw = await AsyncStorage.getItem('user');
+            if (raw) setUserData(JSON.parse(raw));
+        } catch { }
     };
 
-    const setupReminders = async () => {
-        const hasPermission = await requestPermissions();
-        if (!hasPermission) {
-            Alert.alert("Permission Error", "Please enable notifications to receive reminders.");
-        }
-        calculateNextReminders();
-    };
-
-    const calculateNextReminders = () => {
-        const allMedicines = prescriptions.flatMap(p => p.medicines);
+    const buildDoseGroups = () => {
         const now = new Date();
-        const currentTimeInMinutes = now.getHours() * 60 + now.getMinutes();
+        const curMin = now.getHours() * 60 + now.getMinutes();
+        const groups = { morning: [], afternoon: [], night: [] };
 
-        const reminders = [];
-        allMedicines.forEach(medicine => {
-            // Priority: medicine.times > frequency defaults
-            let times = medicine.times;
-            if (!times || times.length === 0) {
-                const frequency = normalizeFrequency(medicine.frequency);
-                times = FREQUENCY_TIMES[frequency] || ["09:00"];
-            }
+        prescriptions.forEach(p => {
+            (p.medicines || []).forEach(med => {
+                const times = med.times?.length
+                    ? med.times
+                    : FREQUENCY_TIMES[normalizeFrequency(med.frequency)] || ['09:00'];
 
-            times.forEach(timeStr => {
-                const [h, m] = timeStr.split(':').map(Number);
-                const timeInMinutes = h * 60 + m;
-                let displayTime = timeInMinutes > currentTimeInMinutes ? `Today, ${timeStr}` : `Tomorrow, ${timeStr}`;
-
-                reminders.push({
-                    ...medicine,
-                    displayTime,
-                    timeInMinutes,
-                    sortValue: timeInMinutes > currentTimeInMinutes ? timeInMinutes : timeInMinutes + 1440,
+                times.forEach(t => {
+                    const [h, m] = t.split(':').map(Number);
+                    const timeMin = h * 60 + m;
+                    const isUpcoming = timeMin > curMin;
+                    const label = `${String(h % 12 || 12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+                    const cat = getTimeCategory(t);
+                    // _slotKey is medicineId + raw time — unique per slot, prevents
+                    // cross-slot contamination in takenTodaySet
+                    const slotKey = `${med.id}_${t.replace(':', '')}`;
+                    groups[cat].push({
+                        ...med,
+                        _timeStr: label,
+                        _upcoming: isUpcoming,
+                        _sortMin: isUpcoming ? timeMin : timeMin + 1440,
+                        _slotKey: slotKey,
+                    });
                 });
             });
         });
 
-        const sortedReminders = reminders.sort((a, b) => a.sortValue - b.sortValue);
-        setUpcomingReminders(sortedReminders.slice(0, 5));
+        Object.keys(groups).forEach(k => groups[k].sort((a, b) => a._sortMin - b._sortMin));
+        const total = Object.values(groups).reduce((s, a) => s + a.length, 0);
+        setGroupedDoses(groups);
+        setTotalToday(total);
     };
 
     const triggerEscalation = async (medicineName) => {
+        if (!userData.caretakerEmail) return;
         try {
-            // Using placeholder IP from previous context or generic localhost for development
-            const response = await fetch('http://192.168.1.5:5000/send-alert', {
+            const res = await fetch(`${BACKEND_URL}/send-alert`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    userEmail: userData.email || 'patient@example.com',
-                    caretakerEmail: userData.caretakerEmail,
-                    medicineName: medicineName
-                }),
+                body: JSON.stringify({ userEmail: userData.email, caretakerEmail: userData.caretakerEmail, medicineName }),
             });
-            const data = await response.json();
-            if (data.status === 'sent') {
-                Alert.alert("Safety Alert", "Caretaker has been notified.");
-            }
-        } catch (error) {
-            console.error("Failed to send alert:", error);
-            // Fallback for simulation if backend is unreachable
-            Alert.alert("Clinic Notified", "Caregiver has been notified via emergency protocol.");
-        }
+            const data = await res.json();
+            if (data.status === 'sent') showInfo('Your caretaker has been notified.');
+        } catch { showInfo('Caretaker notification sent (simulated).'); }
     };
 
     const handleAction = async (medicine, action) => {
-        if (action === 'taken') {
-            logAdherence(medicine.id, 'taken');
-            updateSkipCount(medicine.id, 'reset');
-            Alert.alert("Success", "Medicine marked as taken.");
-            setIsModalVisible(false);
+        if (actionLoading) return;
+
+        // Guard: this specific time slot already taken today
+        if (action === 'taken' && takenTodaySet.has(medicine._slotKey)) {
+            showInfo(`${medicine.name} (${medicine._timeStr}) is already marked as taken today!`);
+            return;
         }
-        else if (action === 'postpone') {
-            const newCount = updateSkipCount(medicine.id, 'increment');
-            if (newCount >= 3) {
-                await triggerEscalation(medicine.name);
-                updateSkipCount(medicine.id, 'reset');
-            } else {
-                await scheduleAdhocNotification(medicine, 10);
-                Alert.alert("Postponed", "We will remind you again in 10 minutes.");
+
+        setActionLoading(true);
+        try {
+            switch (action) {
+                case 'taken':
+                    // Pass _slotKey as 3rd arg so only THIS time slot is marked taken
+                    logAdherence(medicine.id, 'taken', medicine._slotKey);
+                    updateSkipCount(medicine.id, 'reset');
+                    showSuccess(`✓ ${medicine.name} (${medicine._timeStr}) marked as taken!`);
+                    break;
+                case 'postpone': {
+                    const count = updateSkipCount(medicine.id, 'increment');
+                    if (count >= 3) { await triggerEscalation(medicine.name); updateSkipCount(medicine.id, 'reset'); }
+                    else { await scheduleAdhocNotification?.(medicine, 10); showInfo(`🔔 Reminder in 10 minutes.`); }
+                    break;
+                }
+                case 'skip': {
+                    const count = updateSkipCount(medicine.id, 'increment');
+                    // Pass _slotKey so only this slot counts toward skip escalation
+                    logAdherence(medicine.id, 'missed', medicine._slotKey);
+                    if (count >= 3) { await triggerEscalation(medicine.name); updateSkipCount(medicine.id, 'reset'); }
+                    else showInfo(`Dose skipped (${count}/3 before caretaker alert).`);
+                    break;
+                }
             }
-            setIsModalVisible(false);
-        }
-        else if (action === 'skip') {
-            const newCount = updateSkipCount(medicine.id, 'increment');
-            if (newCount >= 3) {
-                await triggerEscalation(medicine.name);
-                updateSkipCount(medicine.id, 'reset');
-            } else {
-                await scheduleAdhocNotification(medicine, 5);
-                logAdherence(medicine.id, 'missed');
-                Alert.alert("Skipped", "Record updated. We will check in again in 5 minutes.");
-            }
-            setIsModalVisible(false);
-        }
+        } catch { showError('Action failed. Please try again.'); }
+        finally { setActionLoading(false); }
     };
 
+    const firstName = userData.email?.split('@')[0] || 'there';
+
     return (
-        <SafeAreaView style={styles.container}>
-            <View style={styles.header}>
-                <Text style={styles.headerTitle}>Daily Reminders</Text>
+        <SafeAreaView style={s.container}>
+            {/* Header */}
+            <View style={s.header}>
+                <View>
+                    <Text style={s.greeting}>{greeting}, {firstName} 👋</Text>
+                    <Text style={s.subGreeting}>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
+                </View>
+                <TouchableOpacity style={s.dashBtn} onPress={() => router.push('/adherence-dashboard')}>
+                    <Ionicons name="stats-chart" size={20} color={colors.primary} />
+                </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={styles.content}>
-                <TouchableOpacity
-                    style={styles.dashboardBtn}
-                    onPress={() => router.push('/adherence-dashboard')}
-                >
-                    <View style={styles.dashboardBtnContent}>
-                        <Ionicons name="stats-chart" size={20} color="#fff" />
-                        <Text style={styles.dashboardBtnText}>View Adherence Dashboard</Text>
+            <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+                {/* Today's summary banner */}
+                <View style={s.summaryCard}>
+                    <View>
+                        <Text style={s.summaryCount}>{totalToday}</Text>
+                        <Text style={s.summaryLabel}>Doses today</Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={18} color="#fff" opacity={0.7} />
-                </TouchableOpacity>
+                    <View style={s.summaryDivider} />
+                    <View>
+                        <Text style={s.summaryCount}>{skipCounts ? Object.values(skipCounts).filter(v => v > 0).length : 0}</Text>
+                        <Text style={s.summaryLabel}>Pending actions</Text>
+                    </View>
+                    <View style={s.summaryDivider} />
+                    <TouchableOpacity onPress={() => router.push('/adherence-dashboard')}>
+                        <Text style={s.summaryCount}>→</Text>
+                        <Text style={[s.summaryLabel, { color: colors.primary }]}>Dashboard</Text>
+                    </TouchableOpacity>
+                </View>
 
-                <Text style={styles.greeting}>Upcoming Doses</Text>
+                {totalToday > 0 ? (
+                    <>{CATEGORIES.map(cat => (
+                        <TimeGroup
+                            key={cat.key}
+                            category={cat}
+                            doses={groupedDoses[cat.key] || []}
+                            onAction={handleAction}
+                            actionLoading={actionLoading}
+                            takenSet={takenTodaySet}
+                        />
+                    ))}</>
 
-                {upcomingReminders.length > 0 ? (
-                    upcomingReminders.map((reminder, index) => (
-                        <View key={`${reminder.id}-${index}`} style={styles.card}>
-                            <View style={styles.cardHeader}>
-                                <View style={styles.headerCore}>
-                                    <FontAwesome5 name="clock" size={14} color="#007AFF" />
-                                    <Text style={styles.cardTitle}>{reminder.displayTime}</Text>
-                                </View>
-                                {skipCounts[reminder.id] > 0 && (
-                                    <View style={styles.skipBadge}>
-                                        <Text style={styles.skipBadgeText}>Postponed {skipCounts[reminder.id]}x</Text>
-                                    </View>
-                                )}
-                            </View>
-
-                            <View style={styles.divider} />
-
-                            <Text style={styles.medicineName}>{reminder.name}</Text>
-                            <Text style={styles.dosage}>{reminder.dosage}</Text>
-
-                            <View style={styles.actionColumn}>
-                                <TouchableOpacity
-                                    style={[styles.actionBtn, styles.takenBtn]}
-                                    onPress={() => handleAction(reminder, 'taken')}
-                                >
-                                    <MaterialIcons name="check-circle" size={18} color="#fff" />
-                                    <Text style={styles.btnText}>Mark as Taken</Text>
-                                </TouchableOpacity>
-
-                                <View style={styles.secondaryActions}>
-                                    <TouchableOpacity
-                                        style={[styles.actionBtn, styles.postponeBtn]}
-                                        onPress={() => handleAction(reminder, 'postpone')}
-                                    >
-                                        <Ionicons name="time-outline" size={18} color="#007AFF" />
-                                        <Text style={[styles.btnText, { color: '#007AFF' }]}>In 10 Mins</Text>
-                                    </TouchableOpacity>
-
-                                    <TouchableOpacity
-                                        style={[styles.actionBtn, styles.skipBtn]}
-                                        onPress={() => handleAction(reminder, 'skip')}
-                                    >
-                                        <MaterialIcons name="block" size={18} color="#FF3B30" />
-                                        <Text style={[styles.btnText, { color: '#FF3B30' }]}>Skip</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
-                        </View>
-                    ))
                 ) : (
-                    <View style={styles.emptyState}>
-                        <FontAwesome5 name="clipboard-check" size={40} color="#ccc" />
-                        <Text style={styles.emptyText}>No reminders scheduled. Add a prescription to get started.</Text>
+                    <View style={s.empty}>
+                        <View style={s.emptyIcon}>
+                            <FontAwesome5 name="clipboard-check" size={36} color={colors.primary} />
+                        </View>
+                        <Text style={s.emptyTitle}>All clear today!</Text>
+                        <Text style={s.emptySub}>No medications scheduled. Add a prescription to get started.</Text>
+                        <TouchableOpacity style={s.addBtn} onPress={() => router.push('/(tabs)/upload')}>
+                            <Ionicons name="add" size={16} color="#fff" />
+                            <Text style={s.addBtnTxt}>Add Prescription</Text>
+                        </TouchableOpacity>
                     </View>
                 )}
+
+                <View style={{ height: 40 }} />
             </ScrollView>
-
-            {/* Action Modal for Notifications */}
-            <Modal
-                transparent={true}
-                visible={isModalVisible}
-                animationType="slide"
-                onRequestClose={() => setIsModalVisible(false)}
-            >
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>Medicine Reminder</Text>
-                            <TouchableOpacity onPress={() => setIsModalVisible(false)}>
-                                <MaterialIcons name="close" size={24} color="#8E8E93" />
-                            </TouchableOpacity>
-                        </View>
-
-                        {selectedMedForModal && (
-                            <View style={styles.modalBody}>
-                                <Text style={styles.medNameText}>{selectedMedForModal.name}</Text>
-                                <Text style={styles.medDosageText}>{selectedMedForModal.dosage}</Text>
-
-                                <View style={styles.modalActions}>
-                                    <TouchableOpacity
-                                        style={[styles.modalBtn, styles.takenBtn]}
-                                        onPress={() => handleAction(selectedMedForModal, 'taken')}
-                                    >
-                                        <MaterialIcons name="check-circle" size={20} color="#fff" />
-                                        <Text style={styles.modalBtnText}>Mark as Taken</Text>
-                                    </TouchableOpacity>
-
-                                    <TouchableOpacity
-                                        style={[styles.modalBtn, styles.postponeBtn]}
-                                        onPress={() => handleAction(selectedMedForModal, 'postpone')}
-                                    >
-                                        <Ionicons name="time-outline" size={20} color="#007AFF" />
-                                        <Text style={[styles.modalBtnText, { color: '#007AFF' }]}>Remind me in 10 Mins</Text>
-                                    </TouchableOpacity>
-
-                                    <TouchableOpacity
-                                        style={[styles.modalBtn, styles.skipBtn]}
-                                        onPress={() => handleAction(selectedMedForModal, 'skip')}
-                                    >
-                                        <MaterialIcons name="block" size={20} color="#FF3B30" />
-                                        <Text style={[styles.modalBtnText, { color: '#FF3B30' }]}>Skip</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
-                        )}
-                    </View>
-                </View>
-            </Modal>
         </SafeAreaView>
     );
 }
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#F2F2F7'
-    },
-    header: {
-        paddingHorizontal: 20,
-        paddingVertical: 15,
-        backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E5EA',
-    },
-    headerTitle: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: '#1a1a1a'
-    },
-    content: {
-        padding: 16
-    },
-    dashboardBtn: {
-        backgroundColor: '#5856D6',
-        borderRadius: 14,
-        padding: 16,
-        marginBottom: 24,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        elevation: 4,
-        shadowColor: '#5856D6',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-    },
-    dashboardBtnContent: {
-        flexDirection: 'row',
-        alignItems: 'center'
-    },
-    dashboardBtnText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '700',
-        marginLeft: 12
-    },
-    greeting: {
-        fontSize: 22,
-        fontWeight: '800',
-        marginBottom: 16,
-        color: '#1C1C1E'
-    },
-    card: {
-        backgroundColor: '#FFFFFF',
-        padding: 16,
-        borderRadius: 12,
-        marginBottom: 16,
-        borderWidth: 1,
-        borderColor: '#E5E5EA'
-    },
-    cardHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 10
-    },
-    headerCore: {
-        flexDirection: 'row',
-        alignItems: 'center'
-    },
-    cardTitle: {
-        fontSize: 12,
-        color: '#007AFF',
-        fontWeight: '700',
-        marginLeft: 6,
-        textTransform: 'uppercase'
-    },
-    skipBadge: {
-        backgroundColor: '#FFF2F2',
-        paddingHorizontal: 8,
-        paddingVertical: 3,
-        borderRadius: 6
-    },
-    skipBadgeText: {
-        fontSize: 10,
-        color: '#FF3B30',
-        fontWeight: '600'
-    },
-    divider: {
-        height: 1,
-        backgroundColor: '#F2F2F7',
-        marginBottom: 12
-    },
-    medicineName: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: '#1C1C1E',
-        marginBottom: 2
-    },
-    dosage: {
-        fontSize: 15,
-        color: '#8E8E93',
-        marginBottom: 16
-    },
-    actionColumn: {
-        gap: 8
-    },
-    secondaryActions: {
-        flexDirection: 'row',
-        gap: 8,
-        justifyContent: 'space-between'
-    },
-    actionBtn: {
-        height: 48,
-        borderRadius: 10,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    takenBtn: {
-        backgroundColor: '#34C759',
-        width: '100%'
-    },
-    postponeBtn: {
-        backgroundColor: '#F2F2F7',
-        flex: 1,
-        borderWidth: 1,
-        borderColor: '#007AFF20'
-    },
-    skipBtn: {
-        backgroundColor: '#F2F2F7',
-        flex: 1,
-        borderWidth: 1,
-        borderColor: '#FF3B3020'
-    },
-    btnText: {
-        color: '#fff',
-        fontWeight: '700',
-        marginLeft: 8,
-        fontSize: 14
-    },
-    emptyState: {
-        alignItems: 'center',
-        marginTop: 60
-    },
-    emptyText: {
-        textAlign: 'center',
-        color: '#8E8E93',
-        fontSize: 16,
-        marginTop: 16,
-        paddingHorizontal: 40
-    },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'flex-end'
-    },
-    modalContent: {
-        backgroundColor: '#fff',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-        padding: 20,
-        paddingBottom: 40
-    },
-    modalHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 20
-    },
-    modalTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#1C1C1E'
-    },
-    modalBody: {
-        alignItems: 'center'
-    },
-    medNameText: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#1C1C1E',
-        marginBottom: 4
-    },
-    medDosageText: {
-        fontSize: 16,
-        color: '#8E8E93',
-        marginBottom: 30
-    },
-    modalActions: {
-        width: '100%',
-        gap: 12
-    },
-    modalBtn: {
-        height: 56,
-        borderRadius: 14,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: '100%'
-    },
-    modalBtnText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '700',
-        marginLeft: 10
-    }
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const s = StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: 14, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
+    greeting: { fontSize: 18, fontWeight: '800', color: colors.textPrimary },
+    subGreeting: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+    dashBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: colors.primaryLight, justifyContent: 'center', alignItems: 'center' },
+    content: { padding: spacing.md, gap: 12 },
+    summaryCard: { backgroundColor: colors.primary, borderRadius: radius.xl, padding: 20, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', ...shadow.lg },
+    summaryCount: { fontSize: 26, fontWeight: '900', color: '#fff', textAlign: 'center' },
+    summaryLabel: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.75)', textAlign: 'center', marginTop: 2 },
+    summaryDivider: { width: 1, height: 36, backgroundColor: 'rgba(255,255,255,0.2)' },
+    empty: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 24, gap: 10 },
+    emptyIcon: { width: 80, height: 80, borderRadius: 24, backgroundColor: colors.primaryLight, justifyContent: 'center', alignItems: 'center', marginBottom: 4 },
+    emptyTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
+    emptySub: { fontSize: 14, color: colors.textSecondary, textAlign: 'center', lineHeight: 20 },
+    addBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.primary, paddingHorizontal: 20, paddingVertical: 12, borderRadius: radius.md, marginTop: 8 },
+    addBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
+});
+
+const tg = StyleSheet.create({
+    group: { gap: 8 },
+    header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+    iconBox: { width: 36, height: 36, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    label: { fontSize: 15, fontWeight: '800', color: colors.textPrimary },
+    range: { fontSize: 11, color: colors.textMuted },
+    countBadge: { marginLeft: 'auto', paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.full },
+    countTxt: { fontSize: 12, fontWeight: '800' },
+});
+
+const dc = StyleSheet.create({
+    card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 14, borderWidth: 1, borderColor: colors.border, ...shadow.sm },
+    cardTaken: { backgroundColor: '#F0FDF4', borderColor: colors.success + '60', opacity: 0.85 },
+    cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    medInfo: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+    pillIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: colors.primaryLight, justifyContent: 'center', alignItems: 'center' },
+    text: { flex: 1 },
+    name: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
+    sub: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+    takenBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.successLight, paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.full },
+    takenBadgeTxt: { fontSize: 12, fontWeight: '800', color: colors.success },
+    actionsWrap: { marginTop: 14, gap: 8, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 14 },
+    takenBtn: { backgroundColor: colors.success, height: 46, borderRadius: radius.md, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 },
+    takenTxt: { color: '#fff', fontWeight: '700', fontSize: 15 },
+    minorRow: { flexDirection: 'row', gap: 8 },
+    minorBtn: { flex: 1, height: 40, borderRadius: radius.md, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, borderWidth: 1.5, backgroundColor: colors.surface },
+    minorTxt: { fontSize: 13, fontWeight: '700' },
 });

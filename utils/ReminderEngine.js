@@ -2,14 +2,16 @@ import * as Notifications from 'expo-notifications';
 import * as Speech from 'expo-speech';
 import { Platform } from 'react-native';
 
-// Configure notifications handler
-Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: false,
-    }),
-});
+// Configure notifications handler — not supported on web
+if (Platform.OS !== 'web') {
+    Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+        }),
+    });
+}
 
 export const FREQUENCY_TIMES = {
     "Once daily": ["09:00"],
@@ -29,6 +31,8 @@ export const normalizeFrequency = (freq) => {
 };
 
 export const scheduleMedicineReminders = async (medicine) => {
+    // Notifications not supported on web
+    if (Platform.OS === 'web') return [];
     // Check if course is already completed
     if (medicine.endDate) {
         const end = new Date(medicine.endDate);
@@ -60,9 +64,9 @@ export const scheduleMedicineReminders = async (medicine) => {
                     data: { medicineId: medicine.id, medicineName: medicine.name },
                 },
                 trigger: {
+                    type: 'daily',
                     hour: hours,
                     minute: minutes,
-                    repeats: true,
                 },
             });
             notificationIds.push(id);
@@ -78,6 +82,7 @@ export const scheduleMedicineReminders = async (medicine) => {
  * Cancels notifications for a medicine
  */
 export const cancelMedicineReminders = async (notificationIds) => {
+    if (Platform.OS === 'web') return;
     if (!notificationIds || notificationIds.length === 0) return;
 
     for (const id of notificationIds) {
@@ -93,6 +98,7 @@ export const cancelMedicineReminders = async (notificationIds) => {
  * Schedules an ad-hoc notification (e.g. for "Remind me in 10 mins")
  */
 export const scheduleAdhocNotification = async (medicine, delayMinutes) => {
+    if (Platform.OS === 'web') return null;
     const id = await Notifications.scheduleNotificationAsync({
         content: {
             title: "Medicine Reminder (Follow-up)",
@@ -110,6 +116,8 @@ export const scheduleAdhocNotification = async (medicine, delayMinutes) => {
  * Speaks the reminder message in English and Telugu
  */
 export const speakReminder = (medicineName) => {
+    // Speech not supported on web
+    if (Platform.OS === 'web') return;
     // 1. English Reminder
     Speech.speak(`Time to take your medicine ${medicineName}`, {
         language: 'en',
@@ -131,6 +139,7 @@ export const speakReminder = (medicineName) => {
  * Request notification permissions
  */
 export const requestPermissions = async () => {
+    if (Platform.OS === 'web') return true; // No permission needed on web
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
     if (existingStatus !== 'granted') {
