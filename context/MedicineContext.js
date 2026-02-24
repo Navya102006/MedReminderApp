@@ -113,30 +113,55 @@ export const MedicineProvider = ({ children }) => {
     };
 
     const deletePrescription = async (id) => {
-        const prescriptionToDelete = prescriptions.find(p => p.id === id);
-        if (prescriptionToDelete) {
-            // Cancel all notifications for all medicines in this prescription
-            for (const med of prescriptionToDelete.medicines) {
-                await cancelMedicineReminders(med.notificationIds);
+        try {
+            const prescriptionToDelete = prescriptions.find(p => p.id === id);
+            if (prescriptionToDelete) {
+                for (const med of prescriptionToDelete.medicines) {
+                    try { await cancelMedicineReminders(med.notificationIds); } catch { /* ignore notification errors */ }
+                }
             }
+            const newPrescriptions = prescriptions.filter(p => p.id !== id);
+            await savePrescriptions(newPrescriptions);
+        } catch (error) {
+            console.error('Failed to delete prescription:', error);
+            throw error; // Let the UI handle it
         }
-        const newPrescriptions = prescriptions.filter(p => p.id !== id);
-        await savePrescriptions(newPrescriptions);
     };
 
     const deleteMedicine = async (prescriptionId, medicineId) => {
-        const newPrescriptions = await Promise.all(prescriptions.map(async (prescription) => {
-            if (prescription.id === prescriptionId) {
-                const medToDelete = prescription.medicines.find(m => m.id === medicineId);
-                if (medToDelete) {
-                    await cancelMedicineReminders(medToDelete.notificationIds);
+        try {
+            const newPrescriptions = await Promise.all(prescriptions.map(async (prescription) => {
+                if (prescription.id === prescriptionId) {
+                    const medToDelete = prescription.medicines.find(m => m.id === medicineId);
+                    if (medToDelete) {
+                        try { await cancelMedicineReminders(medToDelete.notificationIds); } catch { /* ignore */ }
+                    }
+                    const updatedMedicines = prescription.medicines.filter(m => m.id !== medicineId);
+                    return { ...prescription, medicines: updatedMedicines };
                 }
-                const updatedMedicines = prescription.medicines.filter(m => m.id !== medicineId);
+                return prescription;
+            }));
+            await savePrescriptions(newPrescriptions);
+        } catch (error) {
+            console.error('Failed to delete medicine:', error);
+            throw error; // Let the UI handle it
+        }
+    };
+
+    const updateMedicine = async (prescriptionId, updatedMedicine) => {
+        try {
+            const newPrescriptions = prescriptions.map((prescription) => {
+                if (prescription.id !== prescriptionId) return prescription;
+                const updatedMedicines = prescription.medicines.map((m) =>
+                    m.id === updatedMedicine.id ? { ...m, ...updatedMedicine } : m
+                );
                 return { ...prescription, medicines: updatedMedicines };
-            }
-            return prescription;
-        }));
-        await savePrescriptions(newPrescriptions);
+            });
+            await savePrescriptions(newPrescriptions);
+        } catch (error) {
+            console.error('Failed to update medicine:', error);
+            throw error;
+        }
     };
 
     const updateSkipCount = (medicineId, action) => {
@@ -154,10 +179,13 @@ export const MedicineProvider = ({ children }) => {
         return newCount;
     };
 
-    const logAdherence = (medicineId, status) => {
+    const logAdherence = (medicineId, status, slotKey) => {
         const newLog = {
             id: Date.now().toString(),
             medicineId,
+            // slotKey distinguishes Morning/Afternoon/Night slots for the same medicine
+            // Falls back to medicineId for backward compatibility with old logs
+            slotKey: slotKey || medicineId,
             status, // 'taken' | 'missed' | 'postponed'
             timestamp: new Date().toISOString()
         };
@@ -178,6 +206,7 @@ export const MedicineProvider = ({ children }) => {
             addPrescription,
             deletePrescription,
             deleteMedicine,
+            updateMedicine,
             logAdherence,
             updateSkipCount
         }}>
