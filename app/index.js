@@ -1,112 +1,104 @@
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, StatusBar } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { FontAwesome5 } from '@expo/vector-icons';
+import { FontAwesome5, MaterialIcons } from '@expo/vector-icons';
+import { colors, spacing, radius, shadow } from '../constants/theme';
+
+const FEATURES = [
+    { icon: 'bell', label: 'Smart Reminders' },
+    { icon: 'file-medical', label: 'Scan Prescriptions' },
+    { icon: 'chart-line', label: 'Track Adherence' },
+];
 
 export default function WelcomeScreen() {
     const router = useRouter();
 
     return (
         <SafeAreaView style={styles.container}>
-            <View style={styles.content}>
-                <View style={styles.logoContainer}>
-                    <View style={styles.logoCircle}>
-                        <FontAwesome5 name="pills" size={48} color="#007AFF" />
+            <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+
+            <View style={styles.hero}>
+                <View style={styles.logoWrap}>
+                    <FontAwesome5 name="pills" size={38} color={colors.primary} />
+                </View>
+                <Text style={styles.appName}>MedReminder</Text>
+                <Text style={styles.tagline}>Your personal medication companion</Text>
+            </View>
+
+            <View style={styles.features}>
+                {FEATURES.map((f) => (
+                    <View key={f.label} style={styles.featureRow}>
+                        <View style={styles.featureIcon}>
+                            <FontAwesome5 name={f.icon} size={14} color={colors.primary} />
+                        </View>
+                        <Text style={styles.featureText}>{f.label}</Text>
                     </View>
-                    <Text style={styles.title}>MedReminder</Text>
-                    <Text style={styles.subtitle}>Never miss a dose again</Text>
-                </View>
+                ))}
+            </View>
 
-                <View style={styles.buttonContainer}>
-                    <TouchableOpacity
-                        style={[styles.button, styles.loginButton]}
-                        onPress={() => router.push('/auth/login')}
-                        activeOpacity={0.8}
-                    >
-                        <Text style={styles.loginButtonText}>Login</Text>
-                    </TouchableOpacity>
+            <View style={styles.actions}>
+                <TouchableOpacity
+                    style={styles.primaryBtn}
+                    onPress={() => router.push('/auth/login')}
+                    activeOpacity={0.85}
+                >
+                    <Text style={styles.primaryBtnText}>Login</Text>
+                    <MaterialIcons name="arrow-forward" size={20} color="#fff" />
+                </TouchableOpacity>
 
-                    <TouchableOpacity
-                        style={[styles.button, styles.registerButton]}
-                        onPress={() => router.push('/auth/register')}
-                        activeOpacity={0.8}
-                    >
-                        <Text style={styles.registerButtonText}>Register</Text>
-                    </TouchableOpacity>
-                </View>
+                <TouchableOpacity
+                    style={styles.secondaryBtn}
+                    onPress={() => router.push('/auth/register')}
+                    activeOpacity={0.85}
+                >
+                    <Text style={styles.secondaryBtnText}>Create Account</Text>
+                </TouchableOpacity>
             </View>
         </SafeAreaView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#F7F9FC'
+    container: { flex: 1, backgroundColor: colors.background },
+    hero: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: spacing.xl },
+    logoWrap: {
+        width: 88, height: 88, borderRadius: 28,
+        backgroundColor: colors.primaryLight,
+        justifyContent: 'center', alignItems: 'center',
+        marginBottom: spacing.lg,
+        ...shadow.md,
     },
-    content: {
-        flex: 1,
-        justifyContent: 'space-between',
-        padding: 24,
-        paddingBottom: 48
-    },
-    logoContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center'
-    },
-    logoCircle: {
-        width: 100,
-        height: 100,
-        backgroundColor: '#E1E9F5',
-        borderRadius: 50,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 24
-    },
-    title: {
-        fontSize: 36,
-        fontWeight: '800',
-        color: '#1A1A1A',
-        marginBottom: 8,
-        textAlign: 'center'
-    },
-    subtitle: {
-        fontSize: 16,
-        color: '#666',
-        textAlign: 'center'
-    },
-    buttonContainer: {
-        width: '100%',
-        gap: 16
-    },
-    button: {
-        height: 56,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderRadius: 12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 8,
-        elevation: 4
-    },
-    loginButton: {
-        backgroundColor: '#007AFF',
-    },
-    registerButton: {
-        backgroundColor: '#FFFFFF',
+    appName: { fontSize: 34, fontWeight: '800', color: colors.textPrimary, letterSpacing: -0.5 },
+    tagline: { fontSize: 15, color: colors.textSecondary, marginTop: 6, textAlign: 'center' },
+    features: {
+        paddingHorizontal: spacing.xl,
+        paddingVertical: spacing.lg,
+        backgroundColor: colors.surface,
+        marginHorizontal: spacing.md,
+        borderRadius: radius.lg,
         borderWidth: 1,
-        borderColor: '#E1E4E8'
+        borderColor: colors.border,
+        gap: 14,
     },
-    loginButtonText: {
-        color: '#FFFFFF',
-        fontSize: 18,
-        fontWeight: '700'
+    featureRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    featureIcon: {
+        width: 32, height: 32, borderRadius: radius.sm,
+        backgroundColor: colors.primaryLight,
+        justifyContent: 'center', alignItems: 'center',
     },
-    registerButtonText: {
-        color: '#007AFF',
-        fontSize: 18,
-        fontWeight: '700'
-    }
+    featureText: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
+    actions: { padding: spacing.lg, gap: 12 },
+    primaryBtn: {
+        backgroundColor: colors.primary,
+        height: 56, borderRadius: radius.md,
+        flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8,
+        ...shadow.lg,
+    },
+    primaryBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+    secondaryBtn: {
+        height: 56, borderRadius: radius.md, borderWidth: 1.5,
+        borderColor: colors.border, justifyContent: 'center', alignItems: 'center',
+        backgroundColor: colors.surface,
+    },
+    secondaryBtnText: { color: colors.primary, fontSize: 17, fontWeight: '700' },
 });

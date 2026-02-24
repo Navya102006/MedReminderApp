@@ -1,17 +1,29 @@
 """
 Backend Flask application for Medicine Reminder App.
-Handles file uploads and OCR processing.
+Handles file uploads, OCR processing, and caretaker email alerts.
 """
 
 import os
+import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import pytesseract
 from PIL import Image, ImageOps, ImageFilter
+from dotenv import load_dotenv
+
+# Load .env file if present
+load_dotenv()
+
+# Configure structured logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
+log = logging.getLogger(__name__)
 
 app = Flask(__name__)
-# Enable CORS for all domains
 CORS(app)
 
 # Configuration
@@ -34,16 +46,21 @@ for path in possible_tesseract_paths:
     if os.path.exists(path):
         pytesseract.pytesseract.tesseract_cmd = path
         tesseract_found = True
-        print(f"Tesseract found at: {path}")
+        log.info(f"Tesseract found at: {path}")
         break
 
 if not tesseract_found:
-    print("Tesseract not found in common directories. Assuming it's in PATH.")
+    log.info("Tesseract not in common dirs — assuming it is in system PATH.")
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+    log.info(f"Created uploads folder: {UPLOAD_FOLDER}")
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'webp'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # ... (existing imports)
 
@@ -190,6 +207,12 @@ def perform_ocr(image_path):
 
 
 
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint."""
+    return jsonify({'status': 'ok', 'service': 'MedReminder Backend'})
+
+
 @app.route('/upload-prescription', methods=['POST'])
 def upload_prescription():
     """
@@ -202,46 +225,34 @@ def upload_prescription():
     
     if file.filename == '':
         return jsonify({"status": "error", "message": "No selected file"}), 400
-    
-    if file:
-        try:
-            filename = secure_filename(file.filename)
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(file_path)
-            
-            # Perform OCR on the saved image
-            extracted_text = perform_ocr(file_path)
-            
-            # Normalize text
-            text_normalized = extracted_text.lower()
-            
-            # Extract medicine names
-            detected_medicines = extract_medicines(text_normalized)
-            
-            # Extract dosages using regex
-            # Patterns like 500mg, 250 mg, 10ml
-            dosage_patterns = r'\d+\s?(?:mg|ml|g|mcg)'
-            detected_dosages = re.findall(dosage_patterns, text_normalized)
-            # Unique and sorted dosages
-            detected_dosages = sorted(list(set(detected_dosages)))
-            
-            return jsonify({
-                "status": "success",
-                "extracted_text": extracted_text.strip(),
-                "detected_medicines": detected_medicines,
-                "detected_dosages": detected_dosages,
-                "filename": filename
-            })
-            
-        except Exception as e:
-            # Handle any errors (OCR or file saving)
-            print(f"Error processing request: {e}")
-            return jsonify({
-                "status": "error",
-                "message": str(e)
-            }), 500
-    
-    return jsonify({"status": "error", "message": "Unknown error"}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({'status': 'error', 'message': 'Invalid file type. Upload an image (PNG, JPG, etc.)'}), 415
+
+    try:
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        log.info(f"Processing upload: {filename}")
+
+        extracted_text = perform_ocr(file_path)
+        text_normalized = extracted_text.lower()
+        detected_medicines = extract_medicines(text_normalized)
+        detected_dosages = sorted(set(re.findall(r'\d+\s?(?:mg|ml|g|mcg)', text_normalized)))
+
+        log.info(f"OCR complete — {len(detected_medicines)} medicines found in {filename}")
+        return jsonify({
+            'status': 'success',
+            'extracted_text': extracted_text.strip(),
+            'detected_medicines': detected_medicines,
+            'detected_dosages': detected_dosages,
+            'filename': filename
+        })
+    except Exception as e:
+        log.error(f"OCR error on {file.filename}: {e}")
+        return jsonify({'status': 'error', 'message': f'OCR processing failed: {str(e)}'}), 500
+
+    return jsonify({'status': 'error', 'message': 'Unknown error'}), 400
 
 import smtplib
 from email.mime.text import MIMEText
@@ -270,35 +281,34 @@ def send_alert():
     smtp_password = os.environ.get('SMTP_PASSWORD')
 
     if not smtp_user or not smtp_password:
-        print("Email credentials not configured. Skipping email send.")
-        return jsonify({"status": "sent", "simulated": True})
-
-    # Cast to string to satisfy type checker
-    user_str = str(smtp_user)
-    pass_str = str(smtp_password)
-    caretaker_str = str(caretaker_email)
+        log.warning("SMTP credentials not set — simulating email alert.")
+        return jsonify({'status': 'sent', 'simulated': True, 'message': 'Alert simulated (no SMTP config)'})
 
     try:
-        msg = MIMEMultipart()
-        msg['From'] = user_str
-        msg['To'] = caretaker_str
-        msg['Subject'] = "Medication Missed Alert"
+        msg = MIMEMultipart('alternative')
+        msg['From'] = str(smtp_user)
+        msg['To'] = str(caretaker_email)
+        msg['Subject'] = f"⚠️ Medication Alert: {medicine_name} Missed"
 
-        body = f"The patient has postponed or skipped the medicine [{medicine_name}] three consecutive times."
-        msg.attach(MIMEText(body, 'plain'))
+        html = f"""
+        <h3>Medication Missed Alert</h3>
+        <p>The patient (<b>{user_email}</b>) has skipped or postponed <b>{medicine_name}</b> 3 consecutive times.</p>
+        <p>Please check in with them as soon as possible.</p>
+        <hr><p style="color:#888;font-size:12px">Sent by MedReminder</p>
+        """
+        msg.attach(MIMEText(html, 'html'))
 
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        server = smtplib.SMTP(str(smtp_server), smtp_port)
         server.starttls()
-        server.login(user_str, pass_str)
-        text = msg.as_string()
-        server.sendmail(user_str, caretaker_str, text)
+        server.login(str(smtp_user), str(smtp_password))
+        server.sendmail(str(smtp_user), str(caretaker_email), msg.as_string())
         server.quit()
-
-        return jsonify({"status": "sent"})
+        log.info(f"Alert email sent to {caretaker_email} for medicine {medicine_name}")
+        return jsonify({'status': 'sent', 'simulated': False})
     except Exception as e:
-        print(f"Error sending email: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        log.error(f"Failed to send alert email: {e}")
+        return jsonify({'status': 'error', 'message': f'Email send failed: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    # Run server on host=0.0.0.0 port=5000 as requested
+    log.info("Starting MedReminder Backend on 0.0.0.0:5000")
     app.run(host='0.0.0.0', port=5000, debug=True)
