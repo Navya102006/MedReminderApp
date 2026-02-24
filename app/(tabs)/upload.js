@@ -115,7 +115,8 @@ export default function UploadScreen() {
                 type: 'image/jpeg',
             });
 
-            const response = await fetch('http://192.168.1.5:5000/upload-prescription', {
+            const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5000';
+            const response = await fetch(`${apiUrl}/upload-prescription`, {
                 method: 'POST',
                 body: formData,
                 headers: {

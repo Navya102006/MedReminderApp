@@ -106,7 +106,8 @@ export default function HomeScreen() {
     const triggerEscalation = async (medicineName) => {
         try {
             // Using placeholder IP from previous context or generic localhost for development
-            const response = await fetch('http://192.168.1.5:5000/send-alert', {
+            const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5000';
+            const response = await fetch(`${apiUrl}/send-alert`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
